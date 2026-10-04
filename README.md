@@ -70,20 +70,20 @@ omniget
 
 ### 2. Fast CLI Mode (Scriptable)
 ```bash
-# Download best video
-omniget "https://x.com/user/status/123456" --video
+# Download video with specific quality (1080p, 720p, 480p, 360p, best)
+omniget "https://www.youtube.com/watch?v=..." --video -q 1080p
 
 # Download audio only as HQ MP3
 omniget "https://www.youtube.com/watch?v=..." --audio
 
-# Download gallery photos / images
-omniget "https://www.instagram.com/p/..." --images
+# Download gallery photos / full uncompressed images
+omniget "https://x.com/user/status/..." --images
 
-# Save post caption as Markdown
+# Save post caption as Markdown (.md)
 omniget "https://x.com/user/status/..." --text
 
-# Save full post bundle (Media + Caption + Metadata)
-omniget "https://www.reddit.com/r/..." --bundle
+# Bundle Everything into a ZIP archive (Video + Audio + Images + Post Text)
+omniget "https://x.com/user/status/..." --bundle
 
 # Inspect post metadata without downloading
 omniget "https://youtube.com/shorts/..." --inspect
