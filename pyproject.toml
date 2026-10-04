@@ -23,6 +23,7 @@ classifiers = [
     "Topic :: Multimedia :: Video",
 ]
 dependencies = [
+    "curl-cffi>=0.16.3",
     "rich>=13.0.0",
     "textual>=0.60.0",
     "yt-dlp>=2024.0.0",

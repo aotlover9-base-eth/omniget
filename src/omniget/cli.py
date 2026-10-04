@@ -62,6 +62,44 @@ def cli_inspect(engine: MediaEngine, url: str, console: Console):
     return meta
 
 
+def prompt_video_quality(meta: PostMetadata, console: Console) -> str:
+    console.print("\n[bold]Select Video Resolution / Quality:[/bold]")
+    options = [("1", "best", "⭐ Best Available (Maximum Quality) [bold][DEFAULT][/bold]")]
+
+    standard_res = ["1080p", "720p", "480p", "360p"]
+    available = [r for r in meta.available_resolutions if r in standard_res or r.endswith("p")]
+
+    candidate_list = []
+    for r in available:
+        if r not in candidate_list:
+            candidate_list.append(r)
+    for r in standard_res:
+        if r not in candidate_list:
+            candidate_list.append(r)
+
+    for idx, r in enumerate(candidate_list[:4], start=2):
+        label = r
+        if r == "1080p":
+            label = f"{r} (Full HD)"
+        elif r == "720p":
+            label = f"{r} (HD)"
+        elif r == "480p":
+            label = f"{r} (Standard)"
+        elif r == "360p":
+            label = f"{r} (Data Saver)"
+        options.append((str(idx), r, label))
+
+    for key, val, desc in options:
+        console.print(f"  [bold cyan][{key}][/bold cyan] {desc}")
+
+    valid_keys = [opt[0] for opt in options]
+    choice = Prompt.ask("\n[bold]Enter quality choice[/bold]", choices=valid_keys, default="1")
+    for key, val, _ in options:
+        if key == choice:
+            return val
+    return "best"
+
+
 def cli_download(
     engine: MediaEngine,
     history: HistoryManager,
@@ -69,10 +107,12 @@ def cli_download(
     mode: DownloadMode,
     output_dir: Path,
     console: Console,
+    quality: Optional[str] = None,
 ) -> Path:
     plat = detect_platform(url)
     console.print(f"\n[bold cyan]📥 Starting download:[/bold cyan] {url}")
-    console.print(f"[bold]Platform:[/bold] {plat.display_name}  •  [bold]Mode:[/bold] {mode.label}")
+    quality_str = f"  •  [bold]Quality:[/bold] {quality}" if (quality and mode in (DownloadMode.VIDEO, DownloadMode.BUNDLE)) else ""
+    console.print(f"[bold]Platform:[/bold] {plat.display_name}  •  [bold]Mode:[/bold] {mode.label}{quality_str}")
     console.print(f"[bold]Destination:[/bold] [dim]{output_dir.resolve()}[/dim]\n")
 
     progress = Progress(
@@ -116,6 +156,7 @@ def cli_download(
         saved_path = engine.download(
             url=url,
             mode=mode,
+            quality=quality,
             output_dir=output_dir,
             progress_callback=on_progress,
         )
@@ -198,17 +239,38 @@ def interactive_tui(engine: MediaEngine, history: HistoryManager, initial_url: s
         return
 
     # Inspect post
-    cli_inspect(engine, url, console)
+    meta = cli_inspect(engine, url, console)
 
     # Prompt user for mode
     console.print("\n[bold]Select Download Option:[/bold]")
     console.print("  [bold green][1] 📦 Bundle Everything (.zip)[/bold green] [dim](Video + Audio + Images + Post Text into ZIP)[/dim] [bold][DEFAULT][/bold]")
-    console.print("  [bold cyan][2] 🎬 Best Video (MP4 with Audio)[/bold cyan]")
-    console.print("  [bold magenta][3] 🎵 Audio Only (HQ MP3)[/bold magenta]")
-    console.print("  [bold yellow][4] 🖼️ Gallery Images / Photos[/bold yellow]")
+
+    if meta.has_video:
+        res_info = f" [dim]({meta.available_resolutions[0]} available)[/dim]" if meta.available_resolutions else ""
+        console.print(f"  [bold cyan][2] 🎬 Video (Select Quality){res_info}[/bold cyan]")
+    else:
+        console.print("  [dim][2] 🎬 Video (No video stream detected)[/dim]")
+
+    if meta.has_audio:
+        console.print("  [bold magenta][3] 🎵 Audio Only (HQ MP3)[/bold magenta]")
+    else:
+        console.print("  [dim][3] 🎵 Audio Only (No audio track)[/dim]")
+
+    if meta.image_urls:
+        img_label = f"{len(meta.image_urls)} photo{'s' if len(meta.image_urls) > 1 else ''} attached"
+        console.print(f"  [bold yellow][4] 🖼️ Gallery Images ({img_label})[/bold yellow]")
+    elif meta.thumbnail_url:
+        console.print("  [bold yellow][4] 🖼️ Post Thumbnail / Cover (1 image)[/bold yellow]")
+    else:
+        console.print("  [dim][4] 🖼️ Gallery Images (No photos found)[/dim]")
+
     console.print("  [bold blue][5] 📝 Post Text / Captions (post.txt & caption.md)[/bold blue]")
 
-    choice = Prompt.ask("\n[bold]Enter choice [1-5][/bold]", choices=["1", "2", "3", "4", "5"], default="1")
+    default_choice = "1"
+    if not meta.has_video and meta.image_urls:
+        default_choice = "4"
+
+    choice = Prompt.ask("\n[bold]Enter choice [1-5][/bold]", choices=["1", "2", "3", "4", "5"], default=default_choice)
 
     mode_map = {
         "1": DownloadMode.BUNDLE,
@@ -219,8 +281,12 @@ def interactive_tui(engine: MediaEngine, history: HistoryManager, initial_url: s
     }
     mode = mode_map.get(choice, DownloadMode.BUNDLE)
 
+    quality: Optional[str] = None
+    if mode == DownloadMode.VIDEO and meta.has_video:
+        quality = prompt_video_quality(meta, console)
+
     dest_dir = engine.output_dir
-    cli_download(engine, history, url, mode, dest_dir, console)
+    cli_download(engine, history, url, mode, dest_dir, console, quality=quality)
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -269,6 +335,12 @@ def main(argv: list[str] | None = None) -> None:
         "-i", "--inspect",
         action="store_true",
         help="Inspect and display post metadata without downloading",
+    )
+    parser.add_argument(
+        "-q", "--quality",
+        type=str,
+        default=None,
+        help="Select video quality/resolution (e.g. 1080p, 720p, 480p, 360p, best)",
     )
     parser.add_argument(
         "-o", "--output-dir",
@@ -337,7 +409,7 @@ def main(argv: list[str] | None = None) -> None:
             mode = DownloadMode.BUNDLE
 
         render_banner(console)
-        cli_download(engine, history, args.url, mode, dest_dir, console)
+        cli_download(engine, history, args.url, mode, dest_dir, console, quality=args.quality)
         return
 
     # 5. Default: Fast Interactive Terminal TUI

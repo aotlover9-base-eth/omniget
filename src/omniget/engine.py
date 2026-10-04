@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import re
+import urllib.parse
 import urllib.request
 import zipfile
 from typing import Callable, List, Optional
@@ -22,6 +23,226 @@ def sanitize_filename(name: str) -> str:
     return clean[:120] if clean else "download"
 
 
+def upgrade_image_url(url: str) -> str:
+    """Upgrade preview/thumbnail URLs to full uncompressed quality."""
+    if not url:
+        return url
+    # Twitter / X original high-res image
+    if "twimg.com" in url:
+        if "name=" in url:
+            url = re.sub(r"name=[a-zA-Z0-9_]+", "name=orig", url)
+        else:
+            sep = "&" if "?" in url else "?"
+            url = f"{url}{sep}name=orig"
+    # YouTube maximum resolution thumbnail
+    elif "ytimg.com" in url:
+        for low_res in ("hqdefault.jpg", "mqdefault.jpg", "default.jpg", "sddefault.jpg"):
+            if low_res in url:
+                url = url.replace(low_res, "maxresdefault.jpg")
+                break
+    # Reddit preview to original i.redd.it
+    elif "preview.redd.it" in url:
+        url = url.replace("preview.redd.it", "i.redd.it").split("?")[0]
+    return url
+
+
+def deduplicate_image_urls(urls: List[str]) -> List[str]:
+    """
+    Deduplicate image URLs.
+    Removes low-res variants and avatars while preserving unique original images.
+    """
+    seen_bases = set()
+    result = []
+    for u in urls:
+        if not u:
+            continue
+        # Filter profile avatars and UI icons
+        if any(bad in u.lower() for bad in ("profile_images", "user_avatar", "default_avatar", "favicon", "emoji")):
+            continue
+        upgraded = upgrade_image_url(u)
+        base_key = upgraded.split("?")[0]
+        if base_key not in seen_bases:
+            seen_bases.add(base_key)
+            result.append(upgraded)
+    return result
+
+
+def fetch_twitter_fallback(url: str) -> Optional[PostMetadata]:
+    """
+    Extract Twitter / X metadata via FxTwitter API fallback.
+    Essential for tweets with images or text where yt-dlp raises 'No video found'.
+    """
+    m = re.search(r"status/(\d+)", url)
+    if not m:
+        return None
+    tid = m.group(1)
+    req = urllib.request.Request(
+        f"https://api.fxtwitter.com/status/{tid}",
+        headers={"User-Agent": "omniget/0.1.0 (Linux; x86_64)"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=8) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            if not data or data.get("code") != 200:
+                return None
+            tweet = data.get("tweet") or {}
+            author = tweet.get("author", {}).get("name") or "𝕏 Twitter / X"
+            desc = tweet.get("text") or ""
+            title = f"{author}: {desc[:60]}..." if desc else f"{author}'s Post"
+
+            media = tweet.get("media") or {}
+            photos = media.get("photos") or []
+            videos = media.get("videos") or []
+
+            image_urls = []
+            for p in photos:
+                pu = p.get("url")
+                if pu:
+                    image_urls.append(upgrade_image_url(pu))
+
+            has_video = bool(videos)
+            has_audio = False
+            resolutions = []
+            if has_video:
+                v = videos[0]
+                has_audio = True
+                for f in v.get("formats") or v.get("variants") or []:
+                    h = f.get("height")
+                    if h and f"{h}p" not in resolutions:
+                        resolutions.append(f"{h}p")
+                if not resolutions:
+                    resolutions = ["720p"]
+                if not image_urls and v.get("thumbnail_url"):
+                    image_urls.append(upgrade_image_url(v["thumbnail_url"]))
+
+            deduped = deduplicate_image_urls(image_urls)
+            return PostMetadata(
+                url=url,
+                platform=Platform.TWITTER,
+                title=title[:120],
+                author=author,
+                description=desc,
+                has_video=has_video,
+                has_audio=has_audio,
+                has_images=bool(deduped),
+                image_urls=deduped,
+                available_resolutions=resolutions,
+            )
+    except Exception:
+        return None
+
+
+def fetch_reddit_fallback(url: str) -> Optional[PostMetadata]:
+    """
+    Extract Reddit post metadata via Pullpush API or OEmbed fallback.
+    Handles situations where Reddit returns 403 Blocked to standard requests.
+    """
+    m = re.search(r"comments/([a-zA-Z0-9]+)", url)
+    sub_id = m.group(1) if m else None
+
+    # 1. Try Pullpush API
+    if sub_id:
+        try:
+            req = urllib.request.Request(
+                f"https://api.pullpush.io/reddit/submission/search?ids={sub_id}",
+                headers={"User-Agent": "omniget/0.1.0"},
+            )
+            with urllib.request.urlopen(req, timeout=6) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+                items = data.get("data") or []
+                if items:
+                    item = items[0]
+                    title = item.get("title") or "Reddit Post"
+                    author = f"u/{item.get('author')}" if item.get("author") else "Reddit User"
+                    desc = item.get("selftext") or ""
+                    post_url = item.get("url") or ""
+                    is_video = bool(item.get("is_video")) or "v.redd.it" in post_url
+
+                    image_urls = []
+                    if "i.redd.it" in post_url or any(post_url.lower().endswith(ext) for ext in (".jpg", ".png", ".webp", ".gif")):
+                        image_urls.append(post_url)
+
+                    return PostMetadata(
+                        url=url,
+                        platform=Platform.REDDIT,
+                        title=title[:120],
+                        author=author,
+                        description=desc,
+                        has_video=is_video,
+                        has_audio=is_video,
+                        has_images=bool(image_urls),
+                        image_urls=deduplicate_image_urls(image_urls),
+                        available_resolutions=["720p"] if is_video else [],
+                    )
+        except Exception:
+            pass
+
+    # 2. Try Reddit OEmbed
+    try:
+        oembed_url = f"https://www.reddit.com/oembed?url={urllib.parse.quote(url)}"
+        req = urllib.request.Request(oembed_url, headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            if data and data.get("title"):
+                return PostMetadata(
+                    url=url,
+                    platform=Platform.REDDIT,
+                    title=data["title"][:120],
+                    author=f"u/{data.get('author_name', 'Reddit User')}",
+                    description="",
+                    has_video=False,
+                    has_audio=False,
+                    has_images=False,
+                )
+    except Exception:
+        pass
+
+    return None
+
+
+def fetch_opengraph_fallback(url: str, platform: Platform) -> Optional[PostMetadata]:
+    """Extract OpenGraph metadata from web page HTML as universal fallback."""
+    try:
+        req = urllib.request.Request(
+            url,
+            headers={"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"},
+        )
+        with urllib.request.urlopen(req, timeout=6) as resp:
+            html = resp.read().decode("utf-8", errors="ignore")
+
+            title_m = re.search(r"<meta\s+property=[\"']og:title[\"']\s+content=[\"']([^\"']+)[\"']", html, re.I)
+            if not title_m:
+                title_m = re.search(r"<title>([^<]+)</title>", html, re.I)
+            title = title_m.group(1).strip() if title_m else "Web Post"
+
+            desc_m = re.search(r"<meta\s+property=[\"']og:description[\"']\s+content=[\"']([^\"']+)[\"']", html, re.I)
+            desc = desc_m.group(1).strip() if desc_m else ""
+
+            img_m = re.search(r"<meta\s+property=[\"']og:image[\"']\s+content=[\"']([^\"']+)[\"']", html, re.I)
+            img_url = img_m.group(1).strip() if img_m else None
+
+            video_m = re.search(r"<meta\s+property=[\"']og:video[\"']\s+content=[\"']([^\"']+)[\"']", html, re.I)
+            has_video = bool(video_m)
+
+            site_m = re.search(r"<meta\s+property=[\"']og:site_name[\"']\s+content=[\"']([^\"']+)[\"']", html, re.I)
+            author = site_m.group(1).strip() if site_m else platform.display_name
+
+            imgs = [img_url] if img_url else []
+            return PostMetadata(
+                url=url,
+                platform=platform,
+                title=title[:120],
+                author=author,
+                description=desc,
+                has_video=has_video,
+                has_audio=has_video,
+                has_images=bool(imgs),
+                image_urls=deduplicate_image_urls(imgs),
+            )
+    except Exception:
+        return None
+
+
 class MediaEngine:
     """Handles metadata extraction and asset downloading across platforms."""
 
@@ -31,105 +252,127 @@ class MediaEngine:
 
     def inspect_post(self, url: str) -> PostMetadata:
         """
-        Fast inspection of post metadata without downloading media.
+        Fast inspection of post metadata with multi-tier fallback architecture.
         """
         platform = detect_platform(url)
 
         ydl_opts = {
             "quiet": True,
             "no_warnings": True,
+            "noprogress": True,
             "skip_download": True,
             "extract_flat": False,
         }
 
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            try:
+        info = None
+        try:
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 info = ydl.extract_info(url, download=False)
-            except Exception as e:
-                # If extraction failed, provide minimal metadata fallback
-                return PostMetadata(
-                    url=url,
-                    platform=platform,
-                    title="Social Post",
-                    author=platform.display_name,
-                    description=f"Error inspecting URL: {e}",
-                    has_video=True,
-                    has_audio=True,
-                )
+        except Exception:
+            info = None
 
-        if not info:
+        if info:
+            title = info.get("title") or info.get("description") or "Untitled Post"
+            author = info.get("uploader") or info.get("channel") or info.get("creator") or platform.display_name
+            description = info.get("description") or ""
+            duration = info.get("duration")
+            thumbnail = info.get("thumbnail")
+            view_count = info.get("view_count")
+            like_count = info.get("like_count")
+
+            # Collect available video resolutions
+            resolutions = []
+            formats = info.get("formats") or []
+            for f in formats:
+                height = f.get("height")
+                if height and f"{height}p" not in resolutions:
+                    resolutions.append(f"{height}p")
+            resolutions.sort(key=lambda x: int(x.replace("p", "")) if x.replace("p", "").isdigit() else 0, reverse=True)
+
+            # Collect raw image URLs if present
+            raw_image_urls = []
+            if thumbnail:
+                raw_image_urls.append(thumbnail)
+
+            # For YouTube, video thumbnail is the only image (ignore storyboard seek frames)
+            if platform != Platform.YOUTUBE:
+                for t in info.get("thumbnails") or []:
+                    tu = t.get("url")
+                    if tu:
+                        raw_image_urls.append(tu)
+
+            # Check entries for carousels / multi-image posts
+            for entry in info.get("entries") or []:
+                if not entry:
+                    continue
+                entry_thumb = entry.get("thumbnail") or entry.get("url")
+                if entry_thumb:
+                    raw_image_urls.append(entry_thumb)
+                for t in entry.get("thumbnails") or []:
+                    tu = t.get("url")
+                    if tu:
+                        raw_image_urls.append(tu)
+
+            # If Twitter/X, check if there are actual photo attachments via FxTwitter
+            if platform == Platform.TWITTER:
+                tw_meta = fetch_twitter_fallback(url)
+                if tw_meta and tw_meta.image_urls:
+                    raw_image_urls = tw_meta.image_urls
+
+            deduped_images = deduplicate_image_urls(raw_image_urls)
+            has_video = bool(formats and any(f.get("vcodec") not in (None, "none") for f in formats))
+            has_audio = bool(formats and any(f.get("acodec") not in (None, "none") for f in formats))
+
             return PostMetadata(
                 url=url,
                 platform=platform,
-                title="Unknown Post",
-                author="",
-                description="",
+                title=title.strip()[:150],
+                author=author,
+                description=description.strip(),
+                duration_seconds=duration,
+                thumbnail_url=thumbnail,
+                view_count=view_count,
+                like_count=like_count,
+                has_video=has_video,
+                has_audio=has_audio,
+                has_images=bool(deduped_images),
+                image_urls=deduped_images,
+                available_resolutions=resolutions[:5],
             )
 
-        title = info.get("title") or info.get("description") or "Untitled Post"
-        author = info.get("uploader") or info.get("channel") or info.get("creator") or platform.display_name
-        description = info.get("description") or ""
-        duration = info.get("duration")
-        thumbnail = info.get("thumbnail")
-        view_count = info.get("view_count")
-        like_count = info.get("like_count")
+        # Fallbacks when yt-dlp extraction fails
+        if platform == Platform.TWITTER:
+            tw_meta = fetch_twitter_fallback(url)
+            if tw_meta:
+                return tw_meta
 
-        # Collect available video resolutions
-        resolutions = []
-        formats = info.get("formats") or []
-        for f in formats:
-            height = f.get("height")
-            if height and f"{height}p" not in resolutions:
-                resolutions.append(f"{height}p")
-        resolutions.sort(key=lambda x: int(x.replace("p", "")) if x.replace("p", "").isdigit() else 0, reverse=True)
+        if platform == Platform.REDDIT:
+            red_meta = fetch_reddit_fallback(url)
+            if red_meta:
+                return red_meta
 
-        # Collect image URLs if present
-        image_urls = []
-        if thumbnail:
-            image_urls.append(thumbnail)
-        thumbnails = info.get("thumbnails") or []
-        for t in thumbnails:
-            u = t.get("url")
-            if u and u not in image_urls:
-                image_urls.append(u)
+        # Universal OpenGraph fallback
+        og_meta = fetch_opengraph_fallback(url, platform)
+        if og_meta:
+            return og_meta
 
-        # Check entries for carousels / multi-image posts
-        entries = info.get("entries") or []
-        for entry in entries:
-            if not entry:
-                continue
-            entry_thumb = entry.get("thumbnail") or entry.get("url")
-            if entry_thumb and entry_thumb not in image_urls:
-                image_urls.append(entry_thumb)
-            for t in entry.get("thumbnails") or []:
-                tu = t.get("url")
-                if tu and tu not in image_urls:
-                    image_urls.append(tu)
-
-        has_video = bool(formats and any(f.get("vcodec") not in (None, "none") for f in formats))
-        has_audio = bool(formats and any(f.get("acodec") not in (None, "none") for f in formats))
-
+        # Minimal safe fallback
         return PostMetadata(
             url=url,
             platform=platform,
-            title=title.strip()[:150],
-            author=author,
-            description=description.strip(),
-            duration_seconds=duration,
-            thumbnail_url=thumbnail,
-            view_count=view_count,
-            like_count=like_count,
-            has_video=has_video,
-            has_audio=has_audio,
-            has_images=bool(image_urls),
-            image_urls=image_urls,
-            available_resolutions=resolutions[:5],
+            title="Social Post",
+            author=platform.display_name,
+            description=f"Media link: {url}",
+            has_video=False,
+            has_audio=False,
+            has_images=False,
         )
 
     def download(
         self,
         url: str,
         mode: DownloadMode,
+        quality: Optional[str] = None,
         output_dir: Optional[Path] = None,
         progress_callback: Optional[Callable[[DownloadProgress], None]] = None,
     ) -> Path:
@@ -212,7 +455,7 @@ class MediaEngine:
             if meta.has_video:
                 cb(DownloadProgress(status="downloading", percent=20.0, filename="downloading video..."))
                 try:
-                    self.download(url, DownloadMode.VIDEO, output_dir=bundle_dir, progress_callback=cb)
+                    self.download(url, DownloadMode.VIDEO, quality=quality, output_dir=bundle_dir, progress_callback=cb)
                 except Exception:
                     pass
 
@@ -224,13 +467,23 @@ class MediaEngine:
                 except Exception:
                     pass
 
-            # 2f. Download Images if present
+            # 2f. Download ALL Images if present
             if meta.image_urls:
-                cb(DownloadProgress(status="downloading", percent=75.0, filename="downloading images..."))
-                try:
-                    self.download(url, DownloadMode.IMAGES, output_dir=bundle_dir, progress_callback=cb)
-                except Exception:
-                    pass
+                cb(DownloadProgress(status="downloading", percent=70.0, filename="downloading all images..."))
+                for idx, raw_url in enumerate(meta.image_urls):
+                    img_url = upgrade_image_url(raw_url)
+                    try:
+                        ext = ".jpg"
+                        if ".png" in img_url.lower():
+                            ext = ".png"
+                        elif ".webp" in img_url.lower():
+                            ext = ".webp"
+                        target_file = bundle_dir / f"image_{idx+1}{ext}"
+                        req = urllib.request.Request(img_url, headers={"User-Agent": "Mozilla/5.0 (X11; Linux x86_64)"})
+                        with urllib.request.urlopen(req, timeout=20) as resp, open(target_file, "wb") as out_f:
+                            out_f.write(resp.read())
+                    except Exception:
+                        pass
 
             # 2g. Bundle into ZIP archive
             cb(DownloadProgress(status="converting", percent=92.0, filename="zipping bundle archive..."))
@@ -249,31 +502,42 @@ class MediaEngine:
             meta = self.inspect_post(url)
             safe_title = sanitize_filename(meta.title)
 
+            # Ensure we have target images, fallback to thumbnail if none
+            images_to_download = list(meta.image_urls)
+            if not images_to_download and meta.thumbnail_url:
+                images_to_download.append(meta.thumbnail_url)
+
+            # Dedicated folder if multiple images, otherwise dest_dir
+            img_dir = dest_dir / f"{safe_title}_images" if len(images_to_download) > 1 else dest_dir
+            img_dir.mkdir(parents=True, exist_ok=True)
+
             downloaded = []
-            for idx, img_url in enumerate(meta.image_urls[:8]):
+            total_imgs = max(1, len(images_to_download))
+            for idx, raw_url in enumerate(images_to_download):
+                img_url = upgrade_image_url(raw_url)
                 try:
                     ext = ".jpg"
-                    if ".png" in img_url:
+                    if ".png" in img_url.lower():
                         ext = ".png"
-                    elif ".webp" in img_url:
+                    elif ".webp" in img_url.lower():
                         ext = ".webp"
 
-                    target_file = dest_dir / f"{safe_title}_{idx+1}{ext}"
-                    req = urllib.request.Request(img_url, headers={"User-Agent": "Mozilla/5.0"})
-                    with urllib.request.urlopen(req) as resp, open(target_file, "wb") as out_f:
+                    target_file = img_dir / f"{safe_title}_{idx+1}{ext}"
+                    req = urllib.request.Request(img_url, headers={"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"})
+                    with urllib.request.urlopen(req, timeout=20) as resp, open(target_file, "wb") as out_f:
                         out_f.write(resp.read())
                     downloaded.append(target_file)
-                    pct = 10.0 + (idx + 1) / len(meta.image_urls[:8]) * 80.0
+                    pct = 10.0 + (idx + 1) / total_imgs * 85.0
                     cb(DownloadProgress(status="downloading", percent=pct, filename=target_file.name))
                 except Exception:
                     pass
 
             if downloaded:
                 cb(DownloadProgress(status="finished", percent=100.0, filename=downloaded[0].name))
-                return downloaded[0]
+                return img_dir if len(downloaded) > 1 else downloaded[0]
             else:
-                # Fallback to normal yt-dlp thumbnail extraction
-                pass
+                cb(DownloadProgress(status="finished", percent=100.0, filename="No images found"))
+                return dest_dir
 
         # 4. Mode: VIDEO or AUDIO (yt-dlp)
         downloaded_file: Optional[Path] = None
@@ -313,6 +577,7 @@ class MediaEngine:
             "outtmpl": out_template,
             "quiet": True,
             "no_warnings": True,
+            "noprogress": True,
             "progress_hooks": [ydl_hook],
         }
 
@@ -326,20 +591,31 @@ class MediaEngine:
                 }],
             })
         else: # VIDEO
-            ydl_opts.update({
-                "format": "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
-                "merge_output_format": "mp4",
-            })
+            if quality and quality.lower() != "best":
+                h = quality.lower().replace("p", "").strip()
+                if h.isdigit():
+                    ydl_opts.update({
+                        "format": f"bestvideo[height<={h}][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<={h}]+bestaudio/best[height<={h}]/best",
+                        "merge_output_format": "mp4",
+                    })
+                else:
+                    ydl_opts.update({
+                        "format": "bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best[ext=mp4]/best",
+                        "merge_output_format": "mp4",
+                    })
+            else:
+                ydl_opts.update({
+                    "format": "bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best[ext=mp4]/best",
+                    "merge_output_format": "mp4",
+                })
 
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=True)
             if info:
-                # Find final saved filepath
                 requested = info.get("requested_downloads")
                 if requested and requested[0].get("filepath"):
                     downloaded_file = Path(requested[0]["filepath"])
                 else:
-                    # Look for prepared filename
                     raw_fn = ydl.prepare_filename(info)
                     if mode == DownloadMode.AUDIO:
                         base, _ = os.path.splitext(raw_fn)

@@ -88,3 +88,49 @@ def test_download_bundle_everything(tmp_path):
             assert any("post.txt" in n for n in names)
             assert any("caption.md" in n for n in names)
             assert any("metadata.json" in n for n in names)
+
+
+def test_upgrade_image_url():
+    from omniget.engine import upgrade_image_url
+    assert "name=orig" in upgrade_image_url("https://pbs.twimg.com/media/abc.jpg?name=small")
+    assert "name=orig" in upgrade_image_url("https://pbs.twimg.com/media/xyz.jpg")
+    assert upgrade_image_url("https://i.ytimg.com/vi/123/hqdefault.jpg") == "https://i.ytimg.com/vi/123/maxresdefault.jpg"
+    assert upgrade_image_url("https://preview.redd.it/post123.jpg?width=640") == "https://i.redd.it/post123.jpg"
+
+
+def test_deduplicate_image_urls():
+    from omniget.engine import deduplicate_image_urls
+    raw = [
+        "https://pbs.twimg.com/media/123.jpg?name=thumb",
+        "https://pbs.twimg.com/media/123.jpg?name=small",
+        "https://pbs.twimg.com/media/123.jpg?name=large",
+        "https://pbs.twimg.com/media/123.jpg?name=orig",
+        "https://pbs.twimg.com/profile_images/avatar.jpg", # should filter avatar
+        "https://pbs.twimg.com/media/456.jpg?name=medium",
+    ]
+    deduped = deduplicate_image_urls(raw)
+    assert len(deduped) == 2
+    assert "name=orig" in deduped[0]
+    assert "name=orig" in deduped[1]
+
+
+def test_download_images_mode(tmp_path):
+    engine = MediaEngine(default_output_dir=tmp_path)
+    mock_meta = PostMetadata(
+        url="https://x.com/example/status/images",
+        platform=Platform.TWITTER,
+        title="Photo Gallery Post",
+        author="@photographer",
+        description="Check out this photo",
+        has_images=True,
+        image_urls=[],
+        thumbnail_url=None,
+    )
+    with patch.object(engine, "inspect_post", return_value=mock_meta):
+        out = engine.download(
+            url="https://x.com/example/status/images",
+            mode=DownloadMode.IMAGES,
+            output_dir=tmp_path,
+        )
+        assert out.exists()
+
