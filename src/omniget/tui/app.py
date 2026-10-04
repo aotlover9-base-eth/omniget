@@ -180,6 +180,19 @@ RadioButton:focus {
     background: #2ea043;
 }
 
+#btn-bundle-all {
+    min-width: 25;
+    margin-right: 2;
+    background: #8957e5;
+    color: #ffffff;
+    border: tall #a371f7;
+    text-style: bold;
+}
+
+#btn-bundle-all:hover {
+    background: #a371f7;
+}
+
 #btn-copy-caption {
     min-width: 17;
     margin-right: 1;

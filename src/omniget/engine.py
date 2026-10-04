@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import re
 import urllib.request
+import zipfile
 from typing import Callable, List, Optional
 import yt_dlp
 
@@ -92,6 +93,19 @@ class MediaEngine:
             if u and u not in image_urls:
                 image_urls.append(u)
 
+        # Check entries for carousels / multi-image posts
+        entries = info.get("entries") or []
+        for entry in entries:
+            if not entry:
+                continue
+            entry_thumb = entry.get("thumbnail") or entry.get("url")
+            if entry_thumb and entry_thumb not in image_urls:
+                image_urls.append(entry_thumb)
+            for t in entry.get("thumbnails") or []:
+                tu = t.get("url")
+                if tu and tu not in image_urls:
+                    image_urls.append(tu)
+
         has_video = bool(formats and any(f.get("vcodec") != "none" for f in formats))
         has_audio = bool(formats and any(f.get("acodec") != "none" for f in formats)) or bool(duration)
 
@@ -145,7 +159,7 @@ class MediaEngine:
             cb(DownloadProgress(status="finished", percent=100.0, filename=md_path.name))
             return md_path
 
-        # 2. Mode: BUNDLE
+        # 2. Mode: BUNDLE (Bundle Everything: Video + Audio + Images + Post Text -> .zip)
         if mode == DownloadMode.BUNDLE:
             cb(DownloadProgress(status="inspecting", percent=5.0))
             meta = self.inspect_post(url)
@@ -153,25 +167,81 @@ class MediaEngine:
             bundle_dir = dest_dir / safe_folder_name
             bundle_dir.mkdir(parents=True, exist_ok=True)
 
-            # Save Markdown caption
+            # 2a. Convert post to plain .txt
+            txt_path = bundle_dir / "post.txt"
+            txt_content = (
+                f"Title: {meta.title}\n"
+                f"Author: {meta.author}\n"
+                f"Platform: {meta.platform.display_name}\n"
+                f"Source URL: {meta.url}\n\n"
+                f"--- Post Text ---\n"
+                f"{meta.description}\n"
+            )
+            txt_path.write_text(txt_content, encoding="utf-8")
+
+            # 2b. Save Markdown caption
             md_path = bundle_dir / "caption.md"
             md_path.write_text(
                 f"# {meta.title}\n\n"
                 f"- **Author**: {meta.author}\n"
                 f"- **Platform**: {meta.platform.display_name}\n"
-                f"- **URL**: {meta.url}\n\n"
-                f"### Caption\n\n{meta.description}\n",
+                f"- **Source URL**: {meta.url}\n\n"
+                f"### Caption / Text\n\n{meta.description}\n",
                 encoding="utf-8",
             )
 
-            # Save media into bundle directory
-            if meta.has_video:
-                self.download(url, DownloadMode.VIDEO, output_dir=bundle_dir, progress_callback=cb)
-            elif meta.has_images:
-                self.download(url, DownloadMode.IMAGES, output_dir=bundle_dir, progress_callback=cb)
+            # 2c. Save Metadata JSON
+            meta_path = bundle_dir / "metadata.json"
+            meta_dict = {
+                "title": meta.title,
+                "author": meta.author,
+                "platform": meta.platform.value,
+                "url": meta.url,
+                "duration_seconds": meta.duration_seconds,
+                "view_count": meta.view_count,
+                "like_count": meta.like_count,
+                "available_resolutions": meta.available_resolutions,
+                "image_urls": meta.image_urls,
+                "description": meta.description,
+            }
+            meta_path.write_text(json.dumps(meta_dict, indent=2), encoding="utf-8")
 
-            cb(DownloadProgress(status="finished", percent=100.0, filename=bundle_dir.name))
-            return bundle_dir
+            cb(DownloadProgress(status="downloading", percent=15.0, filename="saved post text & metadata"))
+
+            # 2d. Download Video if post has video
+            if meta.has_video:
+                cb(DownloadProgress(status="downloading", percent=20.0, filename="downloading video..."))
+                try:
+                    self.download(url, DownloadMode.VIDEO, output_dir=bundle_dir, progress_callback=cb)
+                except Exception:
+                    pass
+
+            # 2e. Download Audio (MP3) if post has audio or video
+            if meta.has_audio or meta.has_video:
+                cb(DownloadProgress(status="downloading", percent=50.0, filename="extracting audio (MP3)..."))
+                try:
+                    self.download(url, DownloadMode.AUDIO, output_dir=bundle_dir, progress_callback=cb)
+                except Exception:
+                    pass
+
+            # 2f. Download Images if present
+            if meta.image_urls:
+                cb(DownloadProgress(status="downloading", percent=75.0, filename="downloading images..."))
+                try:
+                    self.download(url, DownloadMode.IMAGES, output_dir=bundle_dir, progress_callback=cb)
+                except Exception:
+                    pass
+
+            # 2g. Bundle into ZIP archive
+            cb(DownloadProgress(status="converting", percent=92.0, filename="zipping bundle archive..."))
+            zip_path = dest_dir / f"{safe_folder_name}.zip"
+            with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+                for file_path in bundle_dir.rglob("*"):
+                    if file_path.is_file() and file_path != zip_path:
+                        zf.write(file_path, arcname=f"{safe_folder_name}/{file_path.relative_to(bundle_dir)}")
+
+            cb(DownloadProgress(status="finished", percent=100.0, filename=zip_path.name))
+            return zip_path
 
         # 3. Mode: IMAGES Only
         if mode == DownloadMode.IMAGES:

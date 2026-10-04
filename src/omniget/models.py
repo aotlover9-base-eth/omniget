@@ -45,7 +45,7 @@ class DownloadMode(str, Enum):
             DownloadMode.AUDIO: "🎵 Audio Only (MP3)",
             DownloadMode.IMAGES: "🖼️ Gallery / Images",
             DownloadMode.TEXT: "📝 Post Text / Caption",
-            DownloadMode.BUNDLE: "📦 Full Post Bundle",
+            DownloadMode.BUNDLE: "📦 Bundle Everything (.zip)",
         }
         return labels.get(self, self.value)
 

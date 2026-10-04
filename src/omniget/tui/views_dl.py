@@ -83,11 +83,12 @@ class DownloaderView(Container):
                     yield RadioButton("🎵 Audio Only (MP3 192kbps)", id="mode-audio")
                     yield RadioButton("🖼️ Gallery Images / Photos", id="mode-images")
                     yield RadioButton("📝 Post Caption / Markdown Notes", id="mode-text")
-                    yield RadioButton("📦 Full Archive Bundle (Media + Caption)", id="mode-bundle")
+                    yield RadioButton("📦 Bundle Everything (Video + Audio + Images + Post Text -> .zip)", id="mode-bundle")
 
             # 6. Action Bar
             with Horizontal(id="action-bar"):
-                yield Button("⬇️ Start Download", id="btn-download", variant="success")
+                yield Button("⬇️ Download Selected", id="btn-download", variant="success")
+                yield Button("📦 Bundle Everything (.zip)", id="btn-bundle-all", variant="primary")
                 yield Button("📋 Copy Caption", id="btn-copy-caption", variant="default")
                 yield Button("📁 Open Folder", id="btn-open-folder", variant="default")
 
@@ -132,6 +133,11 @@ class DownloaderView(Container):
 
         elif button_id == "btn-download":
             self.trigger_download()
+
+        elif button_id == "btn-bundle-all":
+            radios = self.query_one("#mode-radios", RadioSet)
+            radios.query_one("#mode-bundle", RadioButton).value = True
+            self.trigger_download(forced_mode=DownloadMode.BUNDLE)
 
         elif button_id == "btn-copy-caption":
             if self.current_meta and self.current_meta.description:
@@ -235,7 +241,7 @@ class DownloaderView(Container):
         lbl_status.update(f"Status: [red]Error: {error}[/red]")
         self.notify(f"Inspection error: {error}", severity="error", timeout=4)
 
-    def trigger_download(self) -> None:
+    def trigger_download(self, forced_mode: Optional[DownloadMode] = None) -> None:
         if self.is_downloading:
             self.notify("Download already in progress!", severity="warning", timeout=2)
             return
@@ -245,22 +251,27 @@ class DownloaderView(Container):
             self.notify("Please enter a URL to download!", severity="warning", timeout=2)
             return
 
-        radios = self.query_one("#mode-radios", RadioSet)
-        pressed = radios.pressed_button
-        button_id = pressed.id if pressed else "mode-video"
+        if forced_mode:
+            mode = forced_mode
+        else:
+            radios = self.query_one("#mode-radios", RadioSet)
+            pressed = radios.pressed_button
+            button_id = pressed.id if pressed else "mode-video"
 
-        mode_map = {
-            "mode-video": DownloadMode.VIDEO,
-            "mode-audio": DownloadMode.AUDIO,
-            "mode-images": DownloadMode.IMAGES,
-            "mode-text": DownloadMode.TEXT,
-            "mode-bundle": DownloadMode.BUNDLE,
-        }
-        mode = mode_map.get(button_id, DownloadMode.VIDEO)
+            mode_map = {
+                "mode-video": DownloadMode.VIDEO,
+                "mode-audio": DownloadMode.AUDIO,
+                "mode-images": DownloadMode.IMAGES,
+                "mode-text": DownloadMode.TEXT,
+                "mode-bundle": DownloadMode.BUNDLE,
+            }
+            mode = mode_map.get(button_id, DownloadMode.VIDEO)
 
         self.is_downloading = True
         btn_dl = self.query_one("#btn-download", Button)
         btn_dl.disabled = True
+        btn_bundle = self.query_one("#btn-bundle-all", Button)
+        btn_bundle.disabled = True
         pbar = self.query_one("#dl-progress-bar", ProgressBar)
         pbar.progress = 0
 
@@ -320,6 +331,8 @@ class DownloaderView(Container):
         self.is_downloading = False
         btn_dl = self.query_one("#btn-download", Button)
         btn_dl.disabled = False
+        btn_bundle = self.query_one("#btn-bundle-all", Button)
+        btn_bundle.disabled = False
 
         pbar = self.query_one("#dl-progress-bar", ProgressBar)
         pbar.progress = 100
@@ -334,6 +347,8 @@ class DownloaderView(Container):
         self.is_downloading = False
         btn_dl = self.query_one("#btn-download", Button)
         btn_dl.disabled = False
+        btn_bundle = self.query_one("#btn-bundle-all", Button)
+        btn_bundle.disabled = False
 
         lbl_status = self.query_one("#lbl-status", Label)
         lbl_status.update(f"Status: [bold red]Download failed: {error}[/bold red]")
