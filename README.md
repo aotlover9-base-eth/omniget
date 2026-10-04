@@ -3,6 +3,34 @@
 > **Universal Social Media Post, Video, Audio, Image & Text Downloader TUI**  
 > *Peak interactive terminal interface powered by `yt-dlp` and `ffmpeg`.*
 
+<div align="center">
+
+![OmniGet Feature Card](assets/day_005_card.jpg)
+
+</div>
+
+---
+
+## 📸 Screenshots & Visual Walkthrough
+
+### 1. Interactive Terminal Console (Fast TUI / CLI)
+*Inspects metadata, prompts for video quality, shows live byte progress with real MB/s, and bundles everything into clean ZIP archives:*
+
+<div align="center">
+
+![OmniGet Terminal Execution](assets/execution_screenshot.png)
+
+</div>
+
+### 2. Graphical Textual TUI (`omniget --gui`)
+*Full mouse support, 1-click clipboard paste, format selector chips, and download history table:*
+
+<div align="center">
+
+![OmniGet Graphical TUI](assets/tui_screenshot.png)
+
+</div>
+
 ---
 
 ## ⚡ The Problem
@@ -90,6 +118,54 @@ omniget "https://youtube.com/shorts/..." --inspect
 
 # View download library
 omniget --history
+```
+
+---
+
+## 🧪 Quick Test Links (All Platforms)
+
+Copy and run these commands to test each supported platform immediately:
+
+### 🔴 YouTube (Video, Audio & Thumbnail)
+```bash
+# Interactive mode (prompts for Bundle, Video Quality, Audio, or Thumbnail):
+omniget "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+
+# Direct 720p MP4 download:
+omniget "https://www.youtube.com/watch?v=dQw4w9WgXcQ" --video -q 720p
+
+# YouTube Shorts bundle:
+omniget "https://youtube.com/shorts/5xH_h38aH60" --bundle
+```
+
+### 𝕏 Twitter / X (Video, Audio, Photos & Text)
+```bash
+# Video post with caption:
+omniget "https://x.com/degen_emo/status/2106267462887227587" --bundle
+
+# Photo post (extracts uncompressed originals):
+omniget "https://x.com/OpenAI/status/1834280548170281146" --images
+```
+
+### 🤖 Reddit (v.redd.it Video + Merged Audio & Galleries)
+```bash
+# Reddit video with merged audio:
+omniget "https://www.reddit.com/r/MadeMeSmile/comments/1fq8g3k/little_girl_hears_for_the_first_time/" --video
+
+# Reddit post caption & text:
+omniget "https://www.reddit.com/r/technology/comments/1fq8g3k/test/" --text
+```
+
+### 📸 Instagram (Reels & Carousels)
+```bash
+# Public Reel:
+omniget "https://www.instagram.com/reel/C8q8q0_OIW7/" --video
+```
+
+### 📘 Facebook (Public Video & Reels)
+```bash
+# Public video inspection & download:
+omniget "https://www.facebook.com/watch/?v=10153231379946729" --inspect
 ```
 
 ---
