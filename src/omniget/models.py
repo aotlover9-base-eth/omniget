@@ -71,7 +71,8 @@ class PostMetadata:
     def formatted_duration(self) -> str:
         if not self.duration_seconds:
             return "Post"
-        mins, secs = divmod(self.duration_seconds, 60)
+        total_secs = int(round(float(self.duration_seconds)))
+        mins, secs = divmod(total_secs, 60)
         hours, mins = divmod(mins, 60)
         if hours:
             return f"{hours}:{mins:02d}:{secs:02d}"
