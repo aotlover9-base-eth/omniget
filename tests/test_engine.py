@@ -222,3 +222,73 @@ def test_platform_folder_separation(tmp_path):
         assert red_zip.parent == tmp_path / "reddit"
         assert red_zip.name == "reddit 1.zip"
 
+
+def test_is_ffmpeg_installed():
+    from omniget.engine import is_ffmpeg_installed
+    assert isinstance(is_ffmpeg_installed(), bool)
+
+
+def test_ffmpeg_missing_raises_error(tmp_path):
+    import pytest
+    engine = MediaEngine(default_output_dir=tmp_path)
+    with patch("omniget.engine.is_ffmpeg_installed", return_value=False):
+        with pytest.raises(RuntimeError) as exc_info:
+            engine.download("https://www.youtube.com/watch?v=123", DownloadMode.VIDEO, output_dir=tmp_path)
+        assert "FFmpeg is not installed" in str(exc_info.value)
+
+
+def test_unshorten_text_urls():
+    from omniget.engine import unshorten_text_urls
+    with patch("omniget.engine.unshorten_url", side_effect=lambda u, timeout=2.5: "https://github.com/Panniantong/Agent-Reach" if "t.co/abc" in u else u):
+        text = "Check tool: https://t.co/abc is awesome!"
+        res = unshorten_text_urls(text)
+        assert res == "Check tool: https://github.com/Panniantong/Agent-Reach is awesome!"
+
+
+def test_is_likely_non_english():
+    from omniget.engine import is_likely_non_english
+    assert is_likely_non_english("开源工具 #爬虫", "zh") is True
+    assert is_likely_non_english("これはテストです", "ja") is True
+    assert is_likely_non_english("Hello world, this is a test!", "en") is False
+    assert is_likely_non_english("Hello world!", "") is False
+
+
+def test_download_bundle_with_translation(tmp_path):
+    engine = MediaEngine(default_output_dir=tmp_path)
+
+    mock_meta = PostMetadata(
+        url="https://x.com/denziideng/status/123456",
+        platform=Platform.TWITTER,
+        title="Agent Crawler Tools",
+        author="Denzii",
+        description="开源工具 #爬虫\n推荐三个好用的工具：\n1. Agent-Reach: https://github.com/Panniantong/Agent-Reach",
+        translation="Open-source tools #crawler\nRecommending 3 useful tools:\n1. Agent-Reach: https://github.com/Panniantong/Agent-Reach",
+        source_language="zh",
+        has_video=False,
+        has_audio=False,
+        has_images=False,
+    )
+
+    with patch.object(engine, "inspect_post", return_value=mock_meta):
+        zip_path = engine.download(
+            url="https://x.com/denziideng/status/123456",
+            mode=DownloadMode.BUNDLE,
+            output_dir=tmp_path,
+        )
+
+        assert zip_path.exists()
+        bundle_dir = tmp_path / "x" / "tweet 1"
+        assert bundle_dir.exists()
+
+        post_txt = (bundle_dir / "post.txt").read_text(encoding="utf-8")
+        assert "--- Original Post ---" in post_txt
+        assert "开源工具 #爬虫" in post_txt
+        assert "--- English Translation ---" in post_txt
+        assert "Open-source tools #crawler" in post_txt
+
+        caption_md = (bundle_dir / "caption.md").read_text(encoding="utf-8")
+        assert "### Original Post" in caption_md
+        assert "开源工具 #爬虫" in caption_md
+        assert "### English Translation" in caption_md
+        assert "Open-source tools #crawler" in caption_md
+

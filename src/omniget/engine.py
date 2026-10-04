@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
 import urllib.parse
 import urllib.request
 import zipfile
@@ -14,6 +15,89 @@ from typing import Callable, List, Optional
 import yt_dlp
 
 from .models import Platform, DownloadMode, PostMetadata, DownloadProgress, detect_platform
+
+
+def is_ffmpeg_installed() -> bool:
+    """Check if ffmpeg executable is present in system PATH."""
+    return shutil.which("ffmpeg") is not None
+
+
+_UNSHORTEN_CACHE: dict[str, str] = {}
+
+
+class NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+_NO_REDIRECT_OPENER = urllib.request.build_opener(NoRedirectHandler)
+
+
+def unshorten_url(url: str, timeout: float = 2.5) -> str:
+    """Expand shortened URL (such as t.co) to full visible destination URL."""
+    if not url:
+        return url
+    if url in _UNSHORTEN_CACHE:
+        return _UNSHORTEN_CACHE[url]
+
+    resolved = url
+    try:
+        req = urllib.request.Request(
+            url,
+            headers={"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"},
+        )
+        req.get_method = lambda: "HEAD"
+        with _NO_REDIRECT_OPENER.open(req, timeout=timeout) as resp:
+            loc = resp.headers.get("Location")
+            if loc:
+                resolved = loc
+    except urllib.error.HTTPError as e:
+        if e.code in (301, 302, 303, 307, 308):
+            loc = e.headers.get("Location")
+            if loc:
+                resolved = loc
+    except Exception:
+        pass
+
+    _UNSHORTEN_CACHE[url] = resolved
+    return resolved
+
+
+def unshorten_text_urls(text: str) -> str:
+    """Replace all t.co shortened links in text with their full destination URLs."""
+    if not text:
+        return ""
+    return re.sub(r"https?://t\.co/[a-zA-Z0-9]+", lambda m: unshorten_url(m.group(0)), text)
+
+
+def is_likely_non_english(text: str, lang: str = "") -> bool:
+    """Check if text is in a non-English language."""
+    if lang and lang.lower() not in ("en", "und", ""):
+        return True
+    cjk_or_non_latin = re.search(
+        r"[\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af\u0400-\u04ff\u0600-\u06ff\u0900-\u097f]",
+        text,
+    )
+    return bool(cjk_or_non_latin)
+
+
+def translate_to_english_fallback(text: str) -> Optional[str]:
+    """Free translation fallback if service did not provide translation."""
+    if not text.strip():
+        return None
+    try:
+        sample = text.strip()[:500]
+        encoded = urllib.parse.quote(sample)
+        url = f"https://api.mymemory.translated.net/get?q={encoded}&langpair=autodetect|en"
+        req = urllib.request.Request(url, headers={"User-Agent": "omniget/0.1.0"})
+        with urllib.request.urlopen(req, timeout=4) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            match = data.get("responseData", {}).get("translatedText")
+            if match and match.strip() and match.strip().lower() != sample.lower():
+                return match.strip()
+    except Exception:
+        pass
+    return None
 
 
 def sanitize_filename(name: str) -> str:
@@ -114,65 +198,108 @@ def deduplicate_image_urls(urls: List[str]) -> List[str]:
 
 def fetch_twitter_fallback(url: str) -> Optional[PostMetadata]:
     """
-    Extract Twitter / X metadata via FxTwitter API fallback.
-    Essential for tweets with images or text where yt-dlp raises 'No video found'.
+    Extract Twitter / X metadata via FxTwitter API v2 / v1.
+    Provides complete untruncated post text, unshortened URLs,
+    high-res photos, videos, and English translation.
     """
     m = re.search(r"status/(\d+)", url)
     if not m:
         return None
     tid = m.group(1)
-    req = urllib.request.Request(
-        f"https://api.fxtwitter.com/status/{tid}",
-        headers={"User-Agent": "omniget/0.1.0 (Linux; x86_64)"},
-    )
+
+    tweet = None
+    # 1. Try FxTwitter API v2 with English translation query
     try:
-        with urllib.request.urlopen(req, timeout=8) as resp:
+        req_v2 = urllib.request.Request(
+            f"https://api.fxtwitter.com/2/status/{tid}?lang=en",
+            headers={"User-Agent": "omniget/0.1.0 (Linux; x86_64)"},
+        )
+        with urllib.request.urlopen(req_v2, timeout=8) as resp:
             data = json.loads(resp.read().decode("utf-8"))
-            if not data or data.get("code") != 200:
-                return None
-            tweet = data.get("tweet") or {}
-            author = tweet.get("author", {}).get("name") or "𝕏 Twitter / X"
-            desc = tweet.get("text") or ""
-            title = f"{author}: {desc[:60]}..." if desc else f"{author}'s Post"
+            if data and (data.get("code") == 200 or "status" in data):
+                tweet = data.get("status") or data.get("tweet")
+    except Exception:
+        tweet = None
 
-            media = tweet.get("media") or {}
-            photos = media.get("photos") or []
-            videos = media.get("videos") or []
-
-            image_urls = []
-            for p in photos:
-                pu = p.get("url")
-                if pu:
-                    image_urls.append(upgrade_image_url(pu))
-
-            has_video = bool(videos)
-            has_audio = False
-            resolutions = []
-            if has_video:
-                v = videos[0]
-                has_audio = True
-                for f in v.get("formats") or v.get("variants") or []:
-                    h = f.get("height")
-                    if h and f"{h}p" not in resolutions:
-                        resolutions.append(f"{h}p")
-                if not resolutions:
-                    resolutions = ["720p"]
-                if not image_urls and v.get("thumbnail_url"):
-                    image_urls.append(upgrade_image_url(v["thumbnail_url"]))
-
-            deduped = deduplicate_image_urls(image_urls)
-            return PostMetadata(
-                url=url,
-                platform=Platform.TWITTER,
-                title=title[:120],
-                author=author,
-                description=desc,
-                has_video=has_video,
-                has_audio=has_audio,
-                has_images=bool(deduped),
-                image_urls=deduped,
-                available_resolutions=resolutions,
+    # 2. Fallback to v1 endpoint
+    if not tweet:
+        try:
+            req_v1 = urllib.request.Request(
+                f"https://api.fxtwitter.com/status/{tid}/en",
+                headers={"User-Agent": "omniget/0.1.0 (Linux; x86_64)"},
             )
+            with urllib.request.urlopen(req_v1, timeout=8) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+                if data and data.get("code") == 200:
+                    tweet = data.get("tweet")
+        except Exception:
+            tweet = None
+
+    if not tweet:
+        return None
+
+    try:
+        author_data = tweet.get("author") or {}
+        author = author_data.get("name") or author_data.get("screen_name") or "𝕏 Twitter / X"
+        raw_text = tweet.get("text") or ""
+        # Unshorten any t.co links in original tweet text
+        desc = unshorten_text_urls(raw_text)
+        title = f"{author}: {desc[:60]}..." if desc else f"{author}'s Post"
+
+        # Translation extraction
+        trans_data = tweet.get("translation") or {}
+        trans_text = trans_data.get("text") or ""
+        source_lang = trans_data.get("source_lang") or tweet.get("lang") or ""
+
+        if trans_text:
+            trans_text = unshorten_text_urls(trans_text)
+        elif is_likely_non_english(desc, source_lang):
+            fallback = translate_to_english_fallback(desc)
+            if fallback:
+                trans_text = fallback
+
+        translation = trans_text if (trans_text and trans_text.strip().lower() != desc.strip().lower()) else None
+
+        media = tweet.get("media") or {}
+        photos = media.get("photos") or []
+        videos = media.get("videos") or []
+
+        image_urls = []
+        for p in photos:
+            pu = p.get("url")
+            if pu:
+                image_urls.append(upgrade_image_url(pu))
+
+        has_video = bool(videos)
+        has_audio = False
+        resolutions = []
+        if has_video:
+            v = videos[0]
+            has_audio = True
+            for f in v.get("formats") or v.get("variants") or []:
+                h = f.get("height")
+                if h and f"{h}p" not in resolutions:
+                    resolutions.append(f"{h}p")
+            if not resolutions:
+                resolutions = ["720p"]
+            if not image_urls and v.get("thumbnail_url"):
+                image_urls.append(upgrade_image_url(v["thumbnail_url"]))
+
+        deduped = deduplicate_image_urls(image_urls)
+        return PostMetadata(
+            url=url,
+            platform=Platform.TWITTER,
+            title=title[:120],
+            author=author,
+            description=desc,
+            has_video=has_video,
+            has_audio=has_audio,
+            has_images=bool(deduped),
+            image_urls=deduped,
+            available_resolutions=resolutions,
+            translation=translation,
+            source_language=source_lang or None,
+        )
     except Exception:
         return None
 
@@ -309,12 +436,19 @@ class MediaEngine:
         """
         platform = detect_platform(url)
 
+        class QuietLogger:
+            def debug(self, msg): pass
+            def info(self, msg): pass
+            def warning(self, msg): pass
+            def error(self, msg): pass
+
         ydl_opts = {
             "quiet": True,
             "no_warnings": True,
             "noprogress": True,
             "skip_download": True,
             "extract_flat": False,
+            "logger": QuietLogger(),
         }
 
         info = None
@@ -366,11 +500,19 @@ class MediaEngine:
                     if tu:
                         raw_image_urls.append(tu)
 
-            # If Twitter/X, check if there are actual photo attachments via FxTwitter
+            # If Twitter/X, fetch full untruncated text, translation, and photos via FxTwitter
+            tw_meta = None
             if platform == Platform.TWITTER:
                 tw_meta = fetch_twitter_fallback(url)
-                if tw_meta and tw_meta.image_urls:
-                    raw_image_urls = tw_meta.image_urls
+                if tw_meta:
+                    if tw_meta.description:
+                        description = tw_meta.description
+                    if tw_meta.title:
+                        title = tw_meta.title
+                    if tw_meta.author:
+                        author = tw_meta.author
+                    if tw_meta.image_urls:
+                        raw_image_urls = tw_meta.image_urls
 
             deduped_images = deduplicate_image_urls(raw_image_urls)
             has_video = bool(formats and any(f.get("vcodec") not in (None, "none") for f in formats))
@@ -391,6 +533,8 @@ class MediaEngine:
                 has_images=bool(deduped_images),
                 image_urls=deduped_images,
                 available_resolutions=resolutions[:5],
+                translation=tw_meta.translation if tw_meta else None,
+                source_language=tw_meta.source_language if tw_meta else None,
             )
 
         # Fallbacks when yt-dlp extraction fails
@@ -446,6 +590,16 @@ class MediaEngine:
         cb = progress_callback or (lambda _: None)
         prefix = self.get_platform_prefix(platform)
 
+        # Check ffmpeg before attempting video/audio downloads
+        if mode in (DownloadMode.VIDEO, DownloadMode.AUDIO):
+            if not is_ffmpeg_installed():
+                cb(DownloadProgress(status="error", error_message="FFmpeg is not installed."))
+                raise RuntimeError(
+                    "FFmpeg is not installed on this system. "
+                    "Please install FFmpeg (e.g. 'sudo apt install ffmpeg' or 'brew install ffmpeg') "
+                    "to process video and audio."
+                )
+
         # 1. Mode: TEXT Only
         if mode == DownloadMode.TEXT:
             cb(DownloadProgress(status="inspecting", percent=10.0))
@@ -458,9 +612,12 @@ class MediaEngine:
                 f"- **Platform**: {meta.platform.display_name}\n"
                 f"- **Author**: {meta.author}\n"
                 f"- **Source URL**: {meta.url}\n\n"
-                f"## Post Content\n\n"
+                f"## Original Post\n\n"
                 f"{meta.description}\n"
             )
+            if meta.translation:
+                content += f"\n## English Translation\n\n{meta.translation}\n"
+
             md_path.write_text(content, encoding="utf-8")
             cb(DownloadProgress(status="finished", percent=100.0, filename=md_path.name))
             return md_path
@@ -473,28 +630,35 @@ class MediaEngine:
             bundle_dir = dest_dir / seq_name
             bundle_dir.mkdir(parents=True, exist_ok=True)
 
-            # 2a. Convert post to plain .txt
+            # 2a. Convert post to plain .txt (Original language text + English translation)
             txt_path = bundle_dir / "post.txt"
             txt_content = (
                 f"Title: {meta.title}\n"
                 f"Author: {meta.author}\n"
                 f"Platform: {meta.platform.display_name}\n"
                 f"Source URL: {meta.url}\n\n"
-                f"--- Post Text ---\n"
+                f"--- Original Post ---\n"
                 f"{meta.description}\n"
             )
+            if meta.translation:
+                txt_content += (
+                    f"\n--- English Translation ---\n"
+                    f"{meta.translation}\n"
+                )
             txt_path.write_text(txt_content, encoding="utf-8")
 
             # 2b. Save Markdown caption
             md_path = bundle_dir / "caption.md"
-            md_path.write_text(
+            md_content = (
                 f"# {meta.title}\n\n"
                 f"- **Author**: {meta.author}\n"
                 f"- **Platform**: {meta.platform.display_name}\n"
                 f"- **Source URL**: {meta.url}\n\n"
-                f"### Caption / Text\n\n{meta.description}\n",
-                encoding="utf-8",
+                f"### Original Post\n\n{meta.description}\n"
             )
+            if meta.translation:
+                md_content += f"\n### English Translation\n\n{meta.translation}\n"
+            md_path.write_text(md_content, encoding="utf-8")
 
             # 2c. Save Metadata JSON
             meta_path = bundle_dir / "metadata.json"
@@ -509,6 +673,8 @@ class MediaEngine:
                 "available_resolutions": meta.available_resolutions,
                 "image_urls": meta.image_urls,
                 "description": meta.description,
+                "translation": meta.translation,
+                "source_language": meta.source_language,
             }
             meta_path.write_text(json.dumps(meta_dict, indent=2), encoding="utf-8")
 

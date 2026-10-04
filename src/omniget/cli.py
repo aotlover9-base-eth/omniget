@@ -53,10 +53,11 @@ def cli_inspect(engine: MediaEngine, url: str, console: Console):
     if meta.image_urls:
         table.add_row("Images Attached", f"{len(meta.image_urls)} photos")
     if meta.description:
-        desc_snippet = meta.description.strip()
-        if len(desc_snippet) > 280:
-            desc_snippet = desc_snippet[:280] + "..."
-        table.add_row("Caption / Text", desc_snippet)
+        if meta.translation:
+            table.add_row("Original Text", meta.description.strip())
+            table.add_row("English Translation", meta.translation.strip())
+        else:
+            table.add_row("Caption / Text", meta.description.strip())
 
     console.print(table)
     return meta

@@ -66,6 +66,8 @@ class PostMetadata:
     has_images: bool = False
     image_urls: List[str] = field(default_factory=list)
     available_resolutions: List[str] = field(default_factory=list)
+    translation: Optional[str] = None
+    source_language: Optional[str] = None
 
     @property
     def formatted_duration(self) -> str:
