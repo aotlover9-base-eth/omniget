@@ -106,8 +106,8 @@ class MediaEngine:
                 if tu and tu not in image_urls:
                     image_urls.append(tu)
 
-        has_video = bool(formats and any(f.get("vcodec") != "none" for f in formats))
-        has_audio = bool(formats and any(f.get("acodec") != "none" for f in formats)) or bool(duration)
+        has_video = bool(formats and any(f.get("vcodec") not in (None, "none") for f in formats))
+        has_audio = bool(formats and any(f.get("acodec") not in (None, "none") for f in formats))
 
         return PostMetadata(
             url=url,
@@ -216,8 +216,8 @@ class MediaEngine:
                 except Exception:
                     pass
 
-            # 2e. Download Audio (MP3) if post has audio or video
-            if meta.has_audio or meta.has_video:
+            # 2e. Download Audio (MP3) only if post actually has an audio track
+            if meta.has_audio:
                 cb(DownloadProgress(status="downloading", percent=50.0, filename="extracting audio (MP3)..."))
                 try:
                     self.download(url, DownloadMode.AUDIO, output_dir=bundle_dir, progress_callback=cb)

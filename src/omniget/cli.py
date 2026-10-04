@@ -79,13 +79,14 @@ def cli_download(
         SpinnerColumn(),
         TextColumn("[bold cyan]{task.description}"),
         BarColumn(bar_width=35),
+        TextColumn("[bold green]{task.percentage:>3.0f}%[/bold green]"),
         DownloadColumn(),
         TransferSpeedColumn(),
         TimeRemainingColumn(),
         console=console,
     )
 
-    task_id = progress.add_task("Downloading...", total=100)
+    task_id = progress.add_task("Preparing download...", total=None)
 
     def on_progress(p: DownloadProgress):
         if p.status == "downloading":
@@ -96,19 +97,20 @@ def cli_download(
                     total=p.total_bytes,
                     description=f"Downloading {p.filename[:28]}..." if p.filename else "Downloading media...",
                 )
-            else:
+            elif p.percent:
                 progress.update(
                     task_id,
-                    completed=p.percent,
-                    total=100,
-                    description=f"Downloading ({p.percent:.1f}%)...",
+                    description=f"Downloading {p.filename[:28]}..." if p.filename else "Downloading...",
                 )
         elif p.status == "converting":
-            progress.update(task_id, description="[yellow]Processing / packaging into ZIP...[/yellow]")
+            progress.update(task_id, description="[yellow]Processing & packaging into ZIP...[/yellow]")
         elif p.status == "inspecting":
-            progress.update(task_id, description="[yellow]Inspecting media target...[/yellow]")
+            progress.update(task_id, description="[yellow]Inspecting target...[/yellow]")
         elif p.status == "finished":
-            progress.update(task_id, completed=100, total=100, description="[green]✓ Done[/green]")
+            if progress.tasks[task_id].total:
+                progress.update(task_id, completed=progress.tasks[task_id].total, description="[green]✓ Complete[/green]")
+            else:
+                progress.update(task_id, description="[green]✓ Complete[/green]")
 
     with progress:
         saved_path = engine.download(

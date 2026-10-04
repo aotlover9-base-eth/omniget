@@ -61,8 +61,8 @@ class PostMetadata:
     thumbnail_url: Optional[str] = None
     view_count: Optional[int] = None
     like_count: Optional[int] = None
-    has_video: bool = True
-    has_audio: bool = True
+    has_video: bool = False
+    has_audio: bool = False
     has_images: bool = False
     image_urls: List[str] = field(default_factory=list)
     available_resolutions: List[str] = field(default_factory=list)
