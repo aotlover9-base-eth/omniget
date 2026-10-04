@@ -4,9 +4,7 @@
 > *Peak interactive terminal interface powered by `yt-dlp` and `ffmpeg`.*
 
 <div align="center">
-
-![OmniGet Feature Card](assets/day_005_card.jpg)
-
+  <img src="assets/day_005_card.jpg" alt="OmniGet Feature Card" width="620" />
 </div>
 
 ---
@@ -17,18 +15,14 @@
 *Inspects metadata, prompts for video quality, shows live byte progress with real MB/s, and bundles everything into clean ZIP archives:*
 
 <div align="center">
-
-![OmniGet Terminal Execution](assets/execution_screenshot.png)
-
+  <img src="assets/execution_screenshot.png" alt="OmniGet Terminal Execution" width="560" />
 </div>
 
 ### 2. Graphical Textual TUI (`omniget --gui`)
 *Full mouse support, 1-click clipboard paste, format selector chips, and download history table:*
 
 <div align="center">
-
-![OmniGet Graphical TUI](assets/tui_screenshot.png)
-
+  <img src="assets/tui_screenshot.png" alt="OmniGet Graphical TUI" width="560" />
 </div>
 
 ---
