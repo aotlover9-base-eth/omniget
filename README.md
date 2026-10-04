@@ -9,20 +9,13 @@
 
 ---
 
-## 📸 Screenshots & Visual Walkthrough
+## 📸 Screenshot & Visual Walkthrough
 
-### 1. Interactive Terminal Console (Fast TUI / CLI)
-*Inspects metadata, prompts for video quality, shows live byte progress with real MB/s, and bundles everything into clean ZIP archives:*
-
-<div align="center">
-  <img src="assets/execution_screenshot.png" alt="OmniGet Terminal Execution" width="560" />
-</div>
-
-### 2. Graphical Textual TUI (`omniget --gui`)
-*Full mouse support, 1-click clipboard paste, format selector chips, and download history table:*
+### Interactive Terminal TUI & CLI
+*Inspects metadata, prompts for video resolution / quality, displays live byte progress with real MB/s transfer speed, and bundles everything into clean ZIP archives:*
 
 <div align="center">
-  <img src="assets/tui_screenshot.png" alt="OmniGet Graphical TUI" width="560" />
+  <img src="assets/execution_screenshot.png" alt="OmniGet Terminal Execution" width="600" />
 </div>
 
 ---
@@ -33,34 +26,37 @@ Downloading content from social media platforms (YouTube, X/Twitter, Instagram, 
 - Ad-heavy, sketchy third-party web downloaders filled with popups and malware.
 - Online tools strip captions, fail on multi-image carousels, or compress videos to 360p.
 - Reddit video audio is stored in separate streams (`v.redd.it`), requiring manual ffmpeg merging.
-- No unified terminal interface that can grab everything at once: the high-res video, audio track, carousel photos, and original post text in one place.
+- Messy file clutter: long, broken social media titles full of emojis and URLs that ruin folder organization.
+- No unified terminal tool that can grab everything at once: high-res video, audio track, carousel photos, and original post text in one place.
 
-**OmniGet** solves this with a **fast, peak-interactive terminal console**: paste any post link, inspect all available assets, and download video (up to 4K), audio (MP3), images, or formatted post text with 1 mouse click.
+**OmniGet** solves this with a **fast, peak-interactive terminal TUI**: paste any post link, inspect all available assets, choose desired quality, and download video (up to 4K), audio (MP3), images, or formatted post text with 1 click.
 
 ---
 
 ## ✨ Features
 
-- 🖱️ **Peak Interactive Terminal UI (Textual)**:
-  - **Full Mouse Support**: Click platform tabs, buttons, checkboxes, destination pickers, and view live progress bars right in your terminal.
-  - **1-Click Clipboard Paste**: Tap `[📋 Paste]` to grab any link directly from your system clipboard.
-- 🌐 **Platform Chooser & Auto-Detect**:
-  - 🔴 **YouTube**: Videos, Shorts, 4K/1080p, and high-fidelity MP3/M4A audio.
-  - 𝕏 **X (Twitter)**: MP4 videos, GIFs, multi-image tweet galleries, and tweet text.
+- 💻 **Peak Interactive Terminal TUI**:
+  - **Clipboard Auto-Detect**: Automatically detects social links from your system clipboard on launch.
+  - **Live Download Telemetry**: Real-time progress bar (0% -> 100%), transfer speed (MB/s), ETA, and file size.
+  - **Video Quality Picker**: Interactive resolution selector (Best, 1080p Full HD, 720p HD, 480p, 360p).
+- 🗂️ **Platform-Specific Subfolders (Zero Clutter)**:
+  - Separate dedicated directories for each platform: `~/Downloads/omniget/x/`, `omniget/youtube/`, `omniget/reddit/`, `omniget/instagram/`, `omniget/facebook/`.
+  - Downloads never get mixed up.
+- 🔢 **Clean Sequential Naming**:
+  - Folders and ZIP archives use clean, predictable sequential names: `tweet 1.zip`, `tweet 2.zip`, `youtube 1.zip`, `reddit 1.zip`.
+  - No more 200-character broken titles cluttering your file manager.
+- 📦 **Bundle Everything (.zip)**:
+  - 1-command packages high-res video, extracted audio MP3, uncompressed gallery photos, caption (`.md` & `.txt`), and `metadata.json` into a single organized ZIP archive.
+- 🌐 **Platform Auto-Detect & Multi-Tier Fallbacks**:
+  - 🔴 **YouTube**: Videos, Shorts, 4K/1080p, and high-fidelity MP3 audio.
+  - 𝕏 **X (Twitter)**: MP4 videos, GIFs, multi-image tweet galleries (FxTwitter fallback), and tweet text.
   - 📸 **Instagram**: Reels, video posts, multi-photo carousel albums, and captions.
   - 🤖 **Reddit**: Videos with automatically merged audio tracks, galleries, and post text.
   - 📘 **Facebook**: Public videos, Reels, photos, and post content.
-  - 🌐 **Auto-Detect**: Paste any supported link and OmniGet automatically detects the platform and configures format options.
-- 📦 **Multi-Asset Ingestion**:
-  - 🎬 **Video**: Best quality, 1080p, or 720p with audio automatically multiplexed.
-  - 🎵 **Audio**: Instant extraction and conversion to MP3/M4A.
-  - 🖼️ **Images**: Download all carousel images, thumbnails, or post photo galleries.
-  - 📝 **Post Text / Captions**: 1-click copy caption to clipboard or save as formatted `.md` file.
-  - 📦 **Full Post Bundle**: Saves the media + metadata + text together into `~/Downloads/omniget/<title>/`.
-- 📊 **Live Download Telemetry**:
-  - Real-time progress bar (0% -> 100%), download speed (MB/s), ETA, and file size.
-- 🕒 **Download History & Library**:
-  - View recent downloads directly inside the TUI with 1-click open in default file manager.
+- 🖼️ **Uncompressed Original Photos**:
+  - Upgrades Twitter images to `name=orig`, YouTube thumbnails to `maxresdefault.jpg`, and Reddit images to uncompressed full-res.
+- 🕒 **Download Library & History**:
+  - Built-in SQLite history tracking with `omniget --history`.
 - 🔒 **100% Local & Free**:
   - Powered by native `yt-dlp` and `ffmpeg`. Zero external cloud relays, zero API fees.
 
@@ -84,11 +80,12 @@ uv tool install . --force
 
 ## 💻 Usage
 
-### 1. Interactive Terminal Console (Mouse & Keyboard)
+### 1. Interactive Terminal TUI
 Simply run:
 ```bash
 omniget
 ```
+OmniGet will auto-detect links from your clipboard or prompt you to paste a URL. It inspects metadata, lets you choose formats and video resolutions, and renders real-time download telemetry.
 
 ### 2. Fast CLI Mode (Scriptable)
 ```bash
@@ -169,14 +166,14 @@ omniget "https://www.facebook.com/watch/?v=10153231379946729" --inspect
 ```
 User Terminal (omniget)
 ┌───────────────────────────────────────────────────────────┐
-│              Textual TUI (Obsidian Dark Theme)             │
-│  Platform Selector • URL Input • Format Pickers • Status  │
+│               Interactive Terminal TUI (Rich)             │
+│   Clipboard Detection • Quality Selector • Live Progress  │
 └─────────────────────────────┬─────────────────────────────┘
                               │
                     ┌─────────▼─────────┐
                     │ Core Engine       │
-                    │ Platform Detect   │
-                    │ Metadata Ingest   │
+                    │ Platform Routing  │
+                    │ Sequential Naming │
                     └─────────┬─────────┘
                               │
           ┌───────────────────┼───────────────────┐
@@ -184,12 +181,13 @@ User Terminal (omniget)
 ┌─────────▼─────────┐ ┌───────▼─────────┐ ┌───────▼─────────┐
 │ Video & Audio     │ │ Image Galleries │ │ Post Captions   │
 │ yt-dlp + ffmpeg   │ │ Direct extract  │ │ Text & Metadata │
-│ 1080p/4K / MP3    │ │ High-Res Photos │ │ Markdown / Text │
+│ 1080p/4K / MP3    │ │ High-Res Photos │ │ Markdown / JSON │
 └───────────────────┘ └─────────────────┘ └─────────────────┘
           │                   │                   │
           └───────────────────┼───────────────────┘
                               ▼
-           Saved to ~/Downloads/omniget/<title>/
+        Saved to ~/Downloads/omniget/<platform>/
+        (e.g., omniget/x/tweet 1.zip, omniget/youtube/youtube 1.zip)
 ```
 
 ---

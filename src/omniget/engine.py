@@ -23,6 +23,51 @@ def sanitize_filename(name: str) -> str:
     return clean[:120] if clean else "download"
 
 
+PLATFORM_SUBFOLDERS = {
+    Platform.TWITTER: "x",
+    Platform.YOUTUBE: "youtube",
+    Platform.INSTAGRAM: "instagram",
+    Platform.REDDIT: "reddit",
+    Platform.FACEBOOK: "facebook",
+    Platform.GENERIC: "other",
+}
+
+PLATFORM_PREFIXES = {
+    Platform.TWITTER: "tweet",
+    Platform.YOUTUBE: "youtube",
+    Platform.INSTAGRAM: "instagram",
+    Platform.REDDIT: "reddit",
+    Platform.FACEBOOK: "facebook",
+    Platform.GENERIC: "media",
+}
+
+
+def get_next_sequence_name(dest_dir: Path, prefix: str) -> str:
+    """
+    Find the next available sequential entity name in dest_dir for a given prefix.
+    E.g. if 'tweet 1.zip' or directory 'tweet 1' exists, returns 'tweet 2'.
+    """
+    if not dest_dir.exists():
+        return f"{prefix} 1"
+
+    pattern = re.compile(rf"^{re.escape(prefix)}[ _](\d+)(?:[._].*)?$", re.IGNORECASE)
+    existing_indices: list[int] = []
+
+    try:
+        for entry in dest_dir.iterdir():
+            m = pattern.match(entry.name)
+            if m:
+                try:
+                    existing_indices.append(int(m.group(1)))
+                except ValueError:
+                    pass
+    except Exception:
+        pass
+
+    next_idx = max(existing_indices, default=0) + 1
+    return f"{prefix} {next_idx}"
+
+
 def upgrade_image_url(url: str) -> str:
     """Upgrade preview/thumbnail URLs to full uncompressed quality."""
     if not url:
@@ -250,6 +295,14 @@ class MediaEngine:
         self.output_dir = default_output_dir or (Path.home() / "Downloads" / "omniget")
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
+    @staticmethod
+    def get_platform_subfolder(platform: Platform) -> str:
+        return PLATFORM_SUBFOLDERS.get(platform, "other")
+
+    @staticmethod
+    def get_platform_prefix(platform: Platform) -> str:
+        return PLATFORM_PREFIXES.get(platform, "media")
+
     def inspect_post(self, url: str) -> PostMetadata:
         """
         Fast inspection of post metadata with multi-tier fallback architecture.
@@ -374,21 +427,31 @@ class MediaEngine:
         mode: DownloadMode,
         quality: Optional[str] = None,
         output_dir: Optional[Path] = None,
+        resolve_platform_subfolder: bool = True,
         progress_callback: Optional[Callable[[DownloadProgress], None]] = None,
     ) -> Path:
         """
         Download media asset according to mode (VIDEO, AUDIO, IMAGES, TEXT, BUNDLE).
+        Organizes files into platform-specific subfolders (e.g. ~/Downloads/omniget/x/)
+        and applies clean sequential naming (e.g. tweet 1, tweet 2) for folders and zips.
         """
-        dest_dir = output_dir or self.output_dir
+        platform = detect_platform(url)
+        subfolder = self.get_platform_subfolder(platform)
+        if resolve_platform_subfolder:
+            dest_dir = (output_dir or self.output_dir) / subfolder
+        else:
+            dest_dir = output_dir or self.output_dir
+
         dest_dir.mkdir(parents=True, exist_ok=True)
         cb = progress_callback or (lambda _: None)
+        prefix = self.get_platform_prefix(platform)
 
         # 1. Mode: TEXT Only
         if mode == DownloadMode.TEXT:
             cb(DownloadProgress(status="inspecting", percent=10.0))
             meta = self.inspect_post(url)
-            safe_name = sanitize_filename(meta.title)
-            md_path = dest_dir / f"{safe_name}.md"
+            seq_name = get_next_sequence_name(dest_dir, prefix)
+            md_path = dest_dir / f"{seq_name}.md"
 
             content = (
                 f"# {meta.title}\n\n"
@@ -406,8 +469,8 @@ class MediaEngine:
         if mode == DownloadMode.BUNDLE:
             cb(DownloadProgress(status="inspecting", percent=5.0))
             meta = self.inspect_post(url)
-            safe_folder_name = sanitize_filename(meta.title)
-            bundle_dir = dest_dir / safe_folder_name
+            seq_name = get_next_sequence_name(dest_dir, prefix)
+            bundle_dir = dest_dir / seq_name
             bundle_dir.mkdir(parents=True, exist_ok=True)
 
             # 2a. Convert post to plain .txt
@@ -455,7 +518,7 @@ class MediaEngine:
             if meta.has_video:
                 cb(DownloadProgress(status="downloading", percent=20.0, filename="downloading video..."))
                 try:
-                    self.download(url, DownloadMode.VIDEO, quality=quality, output_dir=bundle_dir, progress_callback=cb)
+                    self.download(url, DownloadMode.VIDEO, quality=quality, output_dir=bundle_dir, resolve_platform_subfolder=False, progress_callback=cb)
                 except Exception:
                     pass
 
@@ -463,7 +526,7 @@ class MediaEngine:
             if meta.has_audio:
                 cb(DownloadProgress(status="downloading", percent=50.0, filename="extracting audio (MP3)..."))
                 try:
-                    self.download(url, DownloadMode.AUDIO, output_dir=bundle_dir, progress_callback=cb)
+                    self.download(url, DownloadMode.AUDIO, output_dir=bundle_dir, resolve_platform_subfolder=False, progress_callback=cb)
                 except Exception:
                     pass
 
@@ -487,11 +550,11 @@ class MediaEngine:
 
             # 2g. Bundle into ZIP archive
             cb(DownloadProgress(status="converting", percent=92.0, filename="zipping bundle archive..."))
-            zip_path = dest_dir / f"{safe_folder_name}.zip"
+            zip_path = dest_dir / f"{seq_name}.zip"
             with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
                 for file_path in bundle_dir.rglob("*"):
                     if file_path.is_file() and file_path != zip_path:
-                        zf.write(file_path, arcname=f"{safe_folder_name}/{file_path.relative_to(bundle_dir)}")
+                        zf.write(file_path, arcname=f"{seq_name}/{file_path.relative_to(bundle_dir)}")
 
             cb(DownloadProgress(status="finished", percent=100.0, filename=zip_path.name))
             return zip_path
@@ -500,7 +563,7 @@ class MediaEngine:
         if mode == DownloadMode.IMAGES:
             cb(DownloadProgress(status="inspecting", percent=10.0))
             meta = self.inspect_post(url)
-            safe_title = sanitize_filename(meta.title)
+            seq_name = get_next_sequence_name(dest_dir, prefix)
 
             # Ensure we have target images, fallback to thumbnail if none
             images_to_download = list(meta.image_urls)
@@ -508,7 +571,7 @@ class MediaEngine:
                 images_to_download.append(meta.thumbnail_url)
 
             # Dedicated folder if multiple images, otherwise dest_dir
-            img_dir = dest_dir / f"{safe_title}_images" if len(images_to_download) > 1 else dest_dir
+            img_dir = dest_dir / seq_name if len(images_to_download) > 1 else dest_dir
             img_dir.mkdir(parents=True, exist_ok=True)
 
             downloaded = []
@@ -522,7 +585,7 @@ class MediaEngine:
                     elif ".webp" in img_url.lower():
                         ext = ".webp"
 
-                    target_file = img_dir / f"{safe_title}_{idx+1}{ext}"
+                    target_file = img_dir / f"{seq_name}_{idx+1}{ext}" if len(images_to_download) == 1 else img_dir / f"image_{idx+1}{ext}"
                     req = urllib.request.Request(img_url, headers={"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"})
                     with urllib.request.urlopen(req, timeout=20) as resp, open(target_file, "wb") as out_f:
                         out_f.write(resp.read())
@@ -571,7 +634,11 @@ class MediaEngine:
                     filename=os.path.basename(d.get("filename", "")),
                 ))
 
-        out_template = str(dest_dir / "%(title).100B-%(id)s.%(ext)s")
+        if not resolve_platform_subfolder:
+            item_prefix = "audio" if mode == DownloadMode.AUDIO else "video"
+            out_template = str(dest_dir / f"{item_prefix}.%(ext)s")
+        else:
+            out_template = str(dest_dir / "%(title).100B-%(id)s.%(ext)s")
 
         ydl_opts = {
             "outtmpl": out_template,
@@ -625,7 +692,7 @@ class MediaEngine:
                         mp4_candidate = Path(f"{base}.mp4")
                         downloaded_file = mp4_candidate if mp4_candidate.exists() else Path(raw_fn)
 
-        final_path = downloaded_file or (dest_dir / "media.mp4")
+        final_path = downloaded_file or (dest_dir / ("audio.mp3" if mode == DownloadMode.AUDIO else "media.mp4"))
         cb(DownloadProgress(
             status="finished",
             percent=100.0,

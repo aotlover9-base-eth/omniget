@@ -38,6 +38,8 @@ def test_download_text_mode(tmp_path):
 
         assert saved_file.exists()
         assert saved_file.suffix == ".md"
+        assert saved_file.parent == tmp_path / "x"
+        assert saved_file.name == "tweet 1.md"
         content = saved_file.read_text(encoding="utf-8")
         assert "Insightful Tweet" in content
         assert "@researcher" in content
@@ -68,10 +70,11 @@ def test_download_bundle_everything(tmp_path):
 
         assert zip_path.exists()
         assert zip_path.suffix == ".zip"
-        assert zip_path.name == "Complete AI Announcement.zip"
+        assert zip_path.parent == tmp_path / "x"
+        assert zip_path.name == "tweet 1.zip"
 
         # Check bundle directory was created and contains files
-        bundle_dir = tmp_path / "Complete AI Announcement"
+        bundle_dir = tmp_path / "x" / "tweet 1"
         assert bundle_dir.exists()
         assert (bundle_dir / "post.txt").exists()
         assert (bundle_dir / "caption.md").exists()
@@ -133,4 +136,89 @@ def test_download_images_mode(tmp_path):
             output_dir=tmp_path,
         )
         assert out.exists()
+
+
+def test_get_next_sequence_name(tmp_path):
+    from omniget.engine import get_next_sequence_name
+
+    # Empty folder -> "tweet 1"
+    assert get_next_sequence_name(tmp_path / "empty", "tweet") == "tweet 1"
+
+    test_dir = tmp_path / "x"
+    test_dir.mkdir(parents=True, exist_ok=True)
+    assert get_next_sequence_name(test_dir, "tweet") == "tweet 1"
+
+    # Add tweet 1.zip
+    (test_dir / "tweet 1.zip").touch()
+    assert get_next_sequence_name(test_dir, "tweet") == "tweet 2"
+
+    # Add directory tweet 2
+    (test_dir / "tweet 2").mkdir()
+    assert get_next_sequence_name(test_dir, "tweet") == "tweet 3"
+
+    # Add tweet 5.zip (gap)
+    (test_dir / "tweet 5.zip").touch()
+    assert get_next_sequence_name(test_dir, "tweet") == "tweet 6"
+
+    # Unrelated files don't interfere
+    (test_dir / "random.txt").touch()
+    (test_dir / "youtube 1.zip").touch()
+    assert get_next_sequence_name(test_dir, "tweet") == "tweet 6"
+    assert get_next_sequence_name(test_dir, "youtube") == "youtube 2"
+
+
+def test_sequential_bundle_downloads(tmp_path):
+    engine = MediaEngine(default_output_dir=tmp_path)
+
+    mock_meta_1 = PostMetadata(
+        url="https://x.com/user/status/111",
+        platform=Platform.TWITTER,
+        title="First Post",
+        author="@user",
+        description="First",
+        has_video=False,
+        has_audio=False,
+    )
+    mock_meta_2 = PostMetadata(
+        url="https://x.com/user/status/222",
+        platform=Platform.TWITTER,
+        title="Second Post",
+        author="@user",
+        description="Second",
+        has_video=False,
+        has_audio=False,
+    )
+
+    with patch.object(engine, "inspect_post", side_effect=[mock_meta_1, mock_meta_2]):
+        zip1 = engine.download("https://x.com/user/status/111", DownloadMode.BUNDLE, output_dir=tmp_path)
+        assert zip1.name == "tweet 1.zip"
+        assert zip1.parent == tmp_path / "x"
+        assert (tmp_path / "x" / "tweet 1").is_dir()
+
+        zip2 = engine.download("https://x.com/user/status/222", DownloadMode.BUNDLE, output_dir=tmp_path)
+        assert zip2.name == "tweet 2.zip"
+        assert zip2.parent == tmp_path / "x"
+        assert (tmp_path / "x" / "tweet 2").is_dir()
+
+
+def test_platform_folder_separation(tmp_path):
+    engine = MediaEngine(default_output_dir=tmp_path)
+
+    tw_meta = PostMetadata(url="https://x.com/post", platform=Platform.TWITTER, title="Tweet", author="@x", description="text", has_video=False, has_audio=False)
+    yt_meta = PostMetadata(url="https://youtube.com/watch?v=1", platform=Platform.YOUTUBE, title="Vid", author="YT", description="text", has_video=False, has_audio=False)
+    red_meta = PostMetadata(url="https://reddit.com/r/test", platform=Platform.REDDIT, title="Reddit", author="u/me", description="text", has_video=False, has_audio=False)
+
+    with patch.object(engine, "inspect_post", side_effect=[tw_meta, yt_meta, red_meta]):
+        tw_zip = engine.download("https://x.com/post", DownloadMode.BUNDLE, output_dir=tmp_path)
+        yt_zip = engine.download("https://youtube.com/watch?v=1", DownloadMode.BUNDLE, output_dir=tmp_path)
+        red_zip = engine.download("https://reddit.com/r/test", DownloadMode.BUNDLE, output_dir=tmp_path)
+
+        assert tw_zip.parent == tmp_path / "x"
+        assert tw_zip.name == "tweet 1.zip"
+
+        assert yt_zip.parent == tmp_path / "youtube"
+        assert yt_zip.name == "youtube 1.zip"
+
+        assert red_zip.parent == tmp_path / "reddit"
+        assert red_zip.name == "reddit 1.zip"
 

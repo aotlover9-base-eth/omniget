@@ -110,10 +110,12 @@ def cli_download(
     quality: Optional[str] = None,
 ) -> Path:
     plat = detect_platform(url)
+    subfolder = engine.get_platform_subfolder(plat)
+    dest_subfolder = output_dir / subfolder
     console.print(f"\n[bold cyan]📥 Starting download:[/bold cyan] {url}")
     quality_str = f"  •  [bold]Quality:[/bold] {quality}" if (quality and mode in (DownloadMode.VIDEO, DownloadMode.BUNDLE)) else ""
     console.print(f"[bold]Platform:[/bold] {plat.display_name}  •  [bold]Mode:[/bold] {mode.label}{quality_str}")
-    console.print(f"[bold]Destination:[/bold] [dim]{output_dir.resolve()}[/dim]\n")
+    console.print(f"[bold]Destination:[/bold] [dim]{dest_subfolder.resolve()}[/dim]\n")
 
     progress = Progress(
         SpinnerColumn(),
@@ -353,11 +355,6 @@ def main(argv: list[str] | None = None) -> None:
         action="store_true",
         help="Display recent download history",
     )
-    parser.add_argument(
-        "--gui",
-        action="store_true",
-        help="Launch full graphical Textual TUI window",
-    )
 
     args = parser.parse_args(argv)
 
@@ -381,14 +378,7 @@ def main(argv: list[str] | None = None) -> None:
         cli_inspect(engine, args.url, console)
         return
 
-    # 3. Explicit Graphical GUI flag
-    if args.gui:
-        from .tui.app import OmniGetApp
-        app = OmniGetApp(engine=engine, history=history, initial_url=args.url)
-        app.run()
-        return
-
-    # 4. Headless Download Modes via flags
+    # 3. Headless Download Modes via flags
     has_headless_flag = any([args.video, args.audio, args.images, args.text, args.bundle])
 
     if has_headless_flag:
